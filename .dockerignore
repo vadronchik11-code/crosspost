@@ -1,0 +1,8 @@
+.env
+.venv
+data
+xray
+__pycache__
+*.pyc
+start.bat
+run.py

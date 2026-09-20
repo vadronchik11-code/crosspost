@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx[socks]==0.28.1
+python-multipart==0.0.20
+python-dotenv==1.0.1
+telethon==1.37.0
+python-socks[asyncio]==2.5.3
+playwright==1.49.1

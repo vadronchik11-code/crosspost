@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<title>Crosspost – VK + Telegram</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ============ Вход ============ -->
+<div id="login" class="login hidden">
+  <form id="loginForm" class="login-card">
+    <div class="app-icon" aria-hidden="true"><span>C</span></div>
+    <h1 class="display">Crosspost</h1>
+    <p class="subtitle">Отложенный постинг в VK и Telegram</p>
+    <div class="list">
+      <label class="list-row"><span class="list-label">Ник</span><input name="login" autocomplete="username" autocapitalize="off" required></label>
+      <label class="list-row"><span class="list-label">Пароль</span><input name="password" type="password" autocomplete="current-password" required></label>
+    </div>
+    <div id="loginError" class="error hidden"></div>
+    <button class="btn primary block" type="submit">Войти</button>
+  </form>
+</div>
+
+<!-- ============ Приложение ============ -->
+<div id="app" class="app hidden">
+  <header class="topbar">
+    <div class="brand">Crosspost</div>
+    <div id="targets" class="targets"></div>
+    <button id="vkWebBtn" class="btn plain small hidden">VK-браузер</button>
+    <button id="tgLoginBtn" class="btn plain small hidden">Telegram</button>
+    <button id="teamBtn" class="btn plain small hidden">Команда</button>
+    <button id="userBtn" class="btn plain small user-chip"></button>
+  </header>
+
+  <div class="layout" id="layout" data-tab="editor">
+    <!-- список постов -->
+    <aside class="sidebar pane" data-pane="posts">
+      <button id="newPostBtn" class="btn primary block">Новый пост</button>
+      <nav class="source-list" id="filterTabs">
+        <button data-f="all" class="active"><span class="sl-icon all"></span>Все посты<span class="sl-count"></span></button>
+        <button data-f="scheduled"><span class="sl-icon scheduled"></span>В очереди<span class="sl-count"></span></button>
+        <button data-f="draft"><span class="sl-icon draft"></span>Черновики<span class="sl-count"></span></button>
+        <button data-f="published"><span class="sl-icon published"></span>Опубликовано<span class="sl-count"></span></button>
+        <button data-f="error"><span class="sl-icon error"></span>Ошибки<span class="sl-count"></span></button>
+      </nav>
+      <div id="postList" class="post-list list"></div>
+    </aside>
+
+    <!-- редактор -->
+    <main class="editor pane" data-pane="editor">
+      <div class="editor-head">
+        <input id="f_title" class="title-input" placeholder="Название поста">
+        <span id="statusBadge" class="badge"></span>
+      </div>
+      <div id="authorLine" class="author-line"></div>
+      <div id="dirtyBanner" class="banner hidden">
+        <span>Пост уже опубликован, есть неприменённые правки.</span>
+        <button class="btn tinted small" id="syncBtn">Применить на площадках</button>
+      </div>
+
+      <section class="group">
+        <div class="group-title">Текст поста</div>
+        <div class="card pad">
+          <div id="f_common_text" class="rte" data-placeholder="Вставь текст поста…"></div>
+          <div class="row targets-row">
+            <button class="btn target-btn vk" id="btnVk" data-copy="vk"><span class="dot-brand vk"></span>VK<span class="tb-state"></span></button>
+            <button class="btn target-btn tg" id="btnTg" data-copy="tg"><span class="dot-brand tg"></span>Telegram<span class="tb-state"></span></button>
+          </div>
+        </div>
+        <div class="group-footer">Вставь текст из чата VK – ссылки в словах и эмодзи сохранятся. Выдели текст – панель форматирования. Кнопка площадки: зелёная – текст туда есть и пост уйдёт; серая – нажми, чтобы скопировать общий текст; повторное нажатие очищает и выключает площадку.</div>
+      </section>
+
+      <section class="group previews" id="previews">
+        <div class="group-title">Как будет выглядеть <span class="hint">текст правится прямо в посте</span><button class="btn plain small theme-btn" id="themeBtn" type="button">☀ Светлая тема</button></div>
+        <div class="two-col phones">
+          <div class="phone vk-phone">
+            <div class="phone-label vk">VK<span id="vkCount" class="count"></span></div>
+            <div id="previewVk" class="vk-post"></div>
+            <div class="group-footer">Выдели текст – панель: жирный, курсив, подчёркнутый, ссылка.</div>
+          </div>
+          <div class="phone tg-phone">
+            <div class="phone-label tg">Telegram<span id="tgCount" class="count"></span></div>
+            <div id="previewTg" class="tg-chat"></div>
+            <div class="group-footer">Выдели текст, правый клик (на телефоне – панель над выделением) – меню форматирования как в Telegram.</div>
+          </div>
+        </div>
+        <div hidden id="editorPool">
+          <div id="f_vk_text" class="rte vk-text" data-placeholder="Текст для VK…"></div>
+          <div id="f_tg_text" class="rte tg-text" data-placeholder="Текст для Telegram…"></div>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="group-title">Картинки</div>
+        <div class="card">
+          <div class="pad pad-b0">
+            <div id="imageList" class="thumbs"></div>
+            <label class="btn tinted small file-btn">Добавить картинки <input type="file" id="imageInput" accept="image/*" multiple hidden></label>
+          </div>
+          <label class="list-row"><span class="list-label">Telegram: без сжатия (как файл)</span><input type="checkbox" class="switch" id="f_tg_as_file"></label>
+        </div>
+        <div class="group-footer" id="vkImgNote">В VK картинки уходят через <b>VK-браузер</b> (пост с фото создаётся в отложке VK, как руками). Без сессии браузера – только текст. Сайт хранит оригиналы; Telegram сжимает фото сам, без сжатия – только файлом.</div>
+      </section>
+
+      <section class="group">
+        <div class="group-title">Подложка <span class="hint">только для этого поста</span></div>
+        <div class="card pad">
+          <div class="two-col">
+            <div>
+              <div class="sub-title"><span class="dot-brand vk"></span>VK</div>
+              <div id="bgVk" class="bg-picker"></div>
+            </div>
+            <div>
+              <div class="sub-title"><span class="dot-brand tg"></span>Telegram</div>
+              <div id="bgTg" class="bg-picker"></div>
+            </div>
+          </div>
+          <div class="row">
+            <button class="btn tinted small" id="bgSameBtn">Одинаковую для обоих</button>
+          </div>
+          <input type="file" id="bgInputVk" accept="image/*" hidden><input type="file" id="bgInputTg" accept="image/*" hidden>
+        </div>
+        <div class="group-footer">Картинка-фон, идёт первой в посте. У каждого поста своя, новый пост начинается без подложки.</div>
+      </section>
+
+      <section class="group">
+        <div class="group-title">Когда публиковать <span class="hint">время Челябинск, UTC+5. «Опубликовать сейчас» это время не смотрит</span></div>
+        <div class="card pad">
+          <div class="row">
+            <input type="datetime-local" id="f_scheduled_at">
+            <button class="btn tinted small" data-quick="60">+1 ч</button>
+            <button class="btn tinted small" data-quick="180">+3 ч</button>
+            <button class="btn tinted small" data-quick="tomorrow">Завтра 13:00</button>
+          </div>
+          <div id="resultBox" class="results"></div>
+        </div>
+      </section>
+
+      <section class="group" id="historyGroup">
+        <div class="group-title">История</div>
+        <div class="card list" id="historyList"></div>
+      </section>
+
+      <div class="actions material">
+        <button id="deleteBtn" class="btn plain danger">Удалить</button>
+        <span class="spacer"></span>
+        <button id="saveBtn" class="btn plain">В черновик</button>
+        <button id="publishBtn" class="btn tinted green">Опубликовать сейчас</button>
+        <button id="scheduleBtn" class="btn primary">В отложку</button>
+      </div>
+      <div id="msg" class="msg hidden"></div>
+    </main>
+
+  </div>
+
+  <!-- таб-бар для телефона -->
+  <nav class="tabbar material" id="tabbar">
+    <button data-tab="posts"><span class="tb-icon">☰</span>Посты</button>
+    <button data-tab="editor" class="active"><span class="tb-icon">✎</span>Пост</button>
+  </nav>
+</div>
+
+<!-- модалка поиска TG chat id -->
+<div id="chatsModal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Поиск TG_CHAT_ID</h3>
+    <p class="subtitle">Добавь бота админом в канал, напиши в канал любое сообщение и нажми «Обновить».</p>
+    <div id="chatsList"></div>
+    <div class="row end">
+      <button class="btn plain small" id="chatsClose">Закрыть</button>
+      <button class="btn primary small" id="chatsRefresh">Обновить</button>
+    </div>
+  </div>
+</div>
+
+<!-- команда -->
+<div id="teamModal" class="modal hidden">
+  <div class="modal-card wide">
+    <h3>Команда</h3>
+    <p class="subtitle">Создай профиль и скинь человеку ник и пароль. Пароль виден только при создании.</p>
+    <div class="card list" id="usersList"></div>
+    <form id="userForm" class="user-form">
+      <div class="group-title">Новый профиль</div>
+      <div class="card list">
+        <label class="list-row"><span class="list-label">Ник</span><input name="username" autocomplete="off" autocapitalize="off" required></label>
+        <label class="list-row"><span class="list-label">Пароль</span><input name="password" autocomplete="new-password" required minlength="4"></label>
+        <label class="list-row"><span class="list-label">Должность</span>
+          <select name="role">
+            <option value="media">Медиа</option>
+            <option value="teamlead">Тимлид медиа</option>
+            <option value="head">Руковод</option>
+          </select>
+        </label>
+      </div>
+      <div class="row end">
+        <button type="button" class="btn plain small" id="teamClose">Закрыть</button>
+        <button type="submit" class="btn primary small">Создать</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- профиль -->
+<div id="profileModal" class="modal hidden">
+  <div class="modal-card">
+    <h3 id="profileName"></h3>
+    <p class="subtitle" id="profileRole"></p>
+    <form id="pwForm">
+      <div class="card list">
+        <label class="list-row"><span class="list-label">Новый пароль</span><input name="password" type="password" autocomplete="new-password" minlength="4" required></label>
+      </div>
+      <div class="row end">
+        <button type="button" class="btn plain small danger" id="logoutBtn">Выйти</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn plain small" id="profileClose">Закрыть</button>
+        <button type="submit" class="btn primary small">Сменить пароль</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- VK-браузер -->
+<div id="vkWebModal" class="modal hidden">
+  <div class="modal-card wide">
+    <h3>VK-браузер</h3>
+    <p class="subtitle">Ключ сообщества не умеет фото, поэтому пост с картинками сайт создаёт в отложке VK через настоящий браузер под аккаунтом админа группы – так же, как это делает человек.</p>
+    <div id="vkWebStatus" class="results"></div>
+    <div class="row">
+      <button type="button" class="btn primary small" id="vkWebLogin">Открыть окно входа (на этом ПК)</button>
+      <button type="button" class="btn tinted small" id="vkWebCheck">Проверить сессию</button>
+      <button type="button" class="btn plain small" id="vkWebShots">Скриншоты</button>
+    </div>
+    <div class="group-footer">Вход делается один раз на ПК: откроется окно Chromium – войди в VK под админом группы, окно закроется само, сессия ляжет в <code>data/vk_web_state.json</code>. Для VPS скопируй этот файл в <code>data/</code> на сервере. Если VK поменял вёрстку и шаг не прошёл – в «Скриншотах» видно, где остановилось.</div>
+    <div id="vkWebShotList" class="shots"></div>
+    <div class="row end"><button type="button" class="btn plain small" id="vkWebClose">Закрыть</button></div>
+  </div>
+</div>
+
+<!-- вход в Telegram-аккаунт -->
+<div id="tgModal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Telegram-аккаунт</h3>
+    <p class="subtitle">Аккаунт админа канала: через него отложенные посты лежат на серверах Telegram и выходят, даже если сайт выключен. Боты так не умеют.</p>
+    <div id="tgUserStatus" class="results"></div>
+    <form id="tgPhoneForm">
+      <div class="card list">
+        <label class="list-row"><span class="list-label">Телефон</span><input name="phone" inputmode="tel" placeholder="+7 900 000-00-00" required></label>
+      </div>
+      <div class="row end"><button type="submit" class="btn primary small">Получить код</button></div>
+    </form>
+    <form id="tgCodeForm" class="hidden">
+      <div class="card list">
+        <label class="list-row"><span class="list-label">Код из Telegram</span><input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+        <label class="list-row hidden" id="tgPwRow"><span class="list-label">Пароль 2FA</span><input name="password" type="password" autocomplete="current-password"></label>
+      </div>
+      <div class="row end"><button type="submit" class="btn primary small">Войти</button></div>
+    </form>
+    <div class="group-footer">Нужны TG_API_ID и TG_API_HASH в .env (my.telegram.org → API development tools). Прокси для аккаунта: TG_MTPROXY (ссылка tg://proxy…).</div>
+    <div class="row end">
+      <button type="button" class="btn plain small danger hidden" id="tgLogout">Выйти из аккаунта</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn plain small" id="tgClose">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- пост изменился -->
+<div id="syncModal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Пост изменился!</h3>
+    <p class="subtitle">Он уже опубликован. Применить изменения на площадках?</p>
+    <div id="syncInfo" class="subtitle"></div>
+    <div class="row end">
+      <button type="button" class="btn plain small" id="syncLater">Позже</button>
+      <button type="button" class="btn primary small" id="syncNow">Применить</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/emoji.js"></script>
+<script src="/static/editor.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
