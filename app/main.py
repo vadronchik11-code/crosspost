@@ -562,8 +562,20 @@ async def post_create(request: Request, user: dict = Depends(current_user)):
     data["created_by"] = data["updated_by"] = user["username"]
     post = db.create_post(data)
     db.add_history(post["id"], user["username"], "create", {"status": post["status"]})
-    await handoff_vk(post["id"], user["username"])
-    return await handoff_tg(post["id"], user["username"])
+    return await _handoff(post["id"], user["username"])
+
+
+async def _handoff(post_id: int, user: str) -> dict:
+    """Отдать пост в отложки VK/TG под замком: повторный клик «Опубликовать» во время
+    публикации получает 409, а не второй пост в Telegram."""
+    if post_id in _in_progress:
+        raise HTTPException(409, "Пост сейчас публикуется – подожди, пока закончится")
+    _in_progress.add(post_id)
+    try:
+        await handoff_vk(post_id, user)
+        return await handoff_tg(post_id, user)
+    finally:
+        _in_progress.discard(post_id)
 
 
 @api.put("/posts/{post_id}")
@@ -603,8 +615,7 @@ async def post_update(post_id: int, request: Request, user: dict = Depends(curre
         data["remote_dirty"] = True
     post = db.update_post(post_id, data)
     db.add_history(post_id, user["username"], "update", _short_changes(changes))
-    await handoff_vk(post_id, user["username"])
-    return await handoff_tg(post_id, user["username"])
+    return await _handoff(post_id, user["username"])
 
 
 def _short_changes(changes: dict) -> dict:
@@ -640,6 +651,8 @@ async def post_publish(post_id: int, user: dict = Depends(current_user)):
         raise HTTPException(404)
     if not _can_edit_post(user, cur):
         raise HTTPException(403, "Можно публиковать только свои посты")
+    if post_id in _in_progress:
+        raise HTTPException(409, "Пост сейчас публикуется – подожди, пока закончится")
     return await publish_post(post_id, user["username"])
 
 

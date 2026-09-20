@@ -559,7 +559,9 @@ function renderBgPickers() {
 }
 
 // ------------------------------------------------------------------ сохранение / публикация / синхронизация
+let saving = false;   // защита от двойного клика: пока запрос идёт, кнопки выключены, повторный вызов игнорируется
 async function save(status) {
+  if (saving) { showMsg("Подожди – пост ещё отправляется"); return null; }
   const p = readForm();
   if (!canEdit(p)) { showMsg("Это чужой пост – править может автор, тимлид или руковод", true); return null; }
   if (status) p.status = status;
@@ -567,6 +569,9 @@ async function save(status) {
   if (!p.vk_enabled && !p.tg_enabled) { showMsg("Нет текста ни для VK, ни для Telegram – нажми VK или Telegram под общим текстом", true); return null; }
   const wasPublished = p.id && (p.vk_status === "published" || p.tg_status === "published");
   const before = wasPublished && state.posts.find(x => x.id === p.id);
+  saving = true; setBusy(true);
+  const btn = status === "scheduled" ? $("#scheduleBtn") : $("#saveBtn"), label = btn.textContent;
+  if (p.status === "scheduled") { btn.textContent = "Отправляю…"; showMsg("Отправляю в отложку VK/Telegram – это может занять до 2 минут, не нажимай повторно"); }
   try {
     const saved = p.id
       ? await api(`/posts/${p.id}`, { method: "PUT", body: p })
@@ -576,6 +581,7 @@ async function save(status) {
     if (wasPublished && before && contentChanged(before, saved)) askSync(saved);
     return saved;
   } catch (e) { showMsg(e.message, true); return null; }
+  finally { saving = false; btn.textContent = label; setBusy(false); }
 }
 function contentChanged(a, b) {
   return ["vk_text", "tg_text", "vk_background", "tg_background", "tg_as_file", "scheduled_at"].some(k => (a[k] ?? null) !== (b[k] ?? null))
@@ -617,7 +623,9 @@ $("#publishBtn").addEventListener("click", async () => {
   if (!confirm("Опубликовать сейчас? Пост уйдёт в отложку и выйдет через 2 минуты, время в поле «Когда публиковать» не учитывается.")) return;
   const d = new Date(Date.now() + 2 * 60 * 1000); d.setSeconds(0, 0);
   F.scheduled_at.value = toLocalInput(d.toISOString());
+  const b = $("#publishBtn"), label = b.textContent; b.textContent = "Публикую…";
   const s = await save("scheduled");
+  b.textContent = label;
   if (s) showMsg(`Уйдёт через 2 минуты, в ${fmtDate(s.scheduled_at)}`);
 });
 $("#deleteBtn").addEventListener("click", async () => {

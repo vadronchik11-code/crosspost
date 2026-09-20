@@ -94,6 +94,34 @@ class VkWeb:
                 await asyncio.sleep(2)
         raise VkWebError(f"vk.com не открывается из браузера ({str(last)[:80]}). Если VPN на всём ПК – добавь vk.com/vk.ru/userapi.com в исключения VPN")
 
+    async def _close_layers(self, page) -> None:
+        """VK поверх страницы иногда вешает старые модалки (#box_layer_wrap: «Привяжите почту» и т.п.),
+        которые перехватывают клики. Закрываем крестиком/Esc, в крайнем случае прячем через JS."""
+        for _ in range(3):
+            try:
+                if not await page.evaluate(
+                    "() => { const w = document.getElementById('box_layer_wrap'); return !!(w && w.offsetParent !== null && w.offsetHeight > 0); }"
+                ):
+                    return
+                log.info("VK-браузер: закрываю всплывающее окно VK (box_layer)")
+                closed = False
+                for sel in ("#box_layer .box_x_button", "#box_layer_wrap .box_x_button", "#box_layer .box_no_button", "#box_layer_wrap .box_cancel"):
+                    btn = page.locator(sel).first
+                    if await btn.count() and await btn.is_visible():
+                        await btn.click(timeout=3000)
+                        closed = True
+                        break
+                if not closed:
+                    await page.keyboard.press("Escape")
+                await asyncio.sleep(0.8)
+            except Exception as e:  # noqa: BLE001
+                log.warning("VK-браузер: не закрыл box_layer: %s", str(e)[:100])
+                break
+        try:  # всё ещё висит – просто убираем из DOM, чтобы не перекрывал страницу
+            await page.evaluate("() => { for (const id of ['box_layer_wrap','box_layer_bg']) { const w = document.getElementById(id); if (w) w.remove(); } document.body.classList.remove('layers_shown'); }")
+        except Exception:  # noqa: BLE001
+            pass
+
     async def _pass_challenge(self, page):
         """VK при подозрении на бота показывает challenge.html (429). Обычно это JS-проверка,
         которая проходит сама за несколько секунд – ждём; если не прошла, говорим человеку."""
@@ -240,6 +268,7 @@ class VkWeb:
         await asyncio.sleep(2)
         if not await self._logged_in(page):
             await self._fail(page, "login", "Сессия VK протухла – войди заново")
+        await self._close_layers(page)
         await self._shot(page, "01-group")
 
         # 1. открыть композер. Новый дизайн: блок «Создать» внизу → меню → «Пост». Старый: поле «Что у Вас нового?»
