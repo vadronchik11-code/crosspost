@@ -308,7 +308,9 @@ async def login(request: Request, response: Response):
     user = db.verify_user(str(body.get("login", "")).strip(), str(body.get("password", "")))
     if not user:
         raise HTTPException(401, "Неверный ник или пароль")
-    response.set_cookie("session", _make_session(user["id"]), max_age=SESSION_TTL, httponly=True, samesite="lax")
+    # Secure – только по https (за nginx это X-Forwarded-Proto), чтобы локальный http тоже работал
+    secure = (request.headers.get("x-forwarded-proto") or request.url.scheme) == "https"
+    response.set_cookie("session", _make_session(user["id"]), max_age=SESSION_TTL, httponly=True, samesite="lax", secure=secure)
     return {"ok": True, "user": user}
 
 
