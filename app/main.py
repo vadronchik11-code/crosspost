@@ -112,6 +112,7 @@ async def _publish_vk(post: dict, when_ts: int | None) -> dict:
         publish_at = max(int(when_ts or 0), int(time.time()) + VK_BROWSER_DELAY)
         plain, _ = vk.html_to_vk(text)
         res = await vkweb.manager.create_postponed(plain, paths, publish_at)
+        publish_at = int(res.get("publish_at") or publish_at)   # браузер мог сдвинуть время вперёд
         pid = await vk.find_postponed(plain, publish_at)
         if pid:
             res["post_id"] = pid
@@ -134,7 +135,11 @@ async def handoff_vk(post_id: int, user: str) -> dict:
         return post
     try:
         res = await _publish_vk(post, _ts(post["scheduled_at"]))
-        db.update_post(post_id, {"vk_status": "published", "vk_result": res, "vk_error": None})
+        upd = {"vk_status": "published", "vk_result": res, "vk_error": None}
+        if res.get("publish_at") and res["publish_at"] > (_ts(post["scheduled_at"]) or 0):
+            # VK принял время позже запрошенного (флоу в браузере занял больше 2 минут) – Telegram выйдет в то же время
+            upd["scheduled_at"] = datetime.fromtimestamp(res["publish_at"], tz=timezone.utc).isoformat()
+        db.update_post(post_id, upd)
         db.add_history(post_id, user, "publish", {"platform": "vk", "url": res.get("url"), "postponed": True})
     except Exception as e:  # noqa: BLE001
         log.exception("Пост %s: не удалось отдать в отложку VK", post_id)

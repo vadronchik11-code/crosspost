@@ -18,6 +18,7 @@ log = logging.getLogger("vkweb")
 
 STATE = config.DATA_DIR / "vk_web_state.json"
 DEBUG_DIR = config.DATA_DIR / "vk_debug"
+MIN_LEAD = 120   # минимум секунд до выхода записи, считая с момента выбора времени в календаре VK
 HEADED = os.getenv("VK_WEB_HEADED", "").strip() in ("1", "true", "yes")
 # VK – российский сайт, через VPN он часто не отвечает (ERR_TIMED_OUT). По умолчанию браузер идёт напрямую,
 # минуя системный прокси. VK_WEB_PROXY=http://host:port – если наоборот нужен прокси.
@@ -363,7 +364,12 @@ class VkWeb:
         await self._shot(page, "05-settings")
         await self._dump(page, "05-settings")
 
-        # 5. «Запланировать» → календарь
+        # 5. «Запланировать» → календарь. Время считаем заново здесь: до этого шага (открытие VK,
+        # загрузка фото) могло пройти больше 2 минут, и VK не примет уже наступивший час/минуту.
+        floor = int(time.time()) + MIN_LEAD
+        if publish_at < floor:
+            publish_at = floor - floor % 60 + 60   # следующая целая минута
+            log.info("VK-браузер: время выхода сдвинуто вперёд на %s", datetime.fromtimestamp(publish_at, tz=TZ))
         when = datetime.fromtimestamp(publish_at, tz=TZ)
         plan = await self._first(page, [
             dialog.get_by_role("button", name=re.compile(r"Запланировать", re.I)), dialog.get_by_text(re.compile(r"^\s*Запланировать\s*$", re.I)),
@@ -375,7 +381,15 @@ class VkWeb:
         await asyncio.sleep(1.5)
         await self._shot(page, "06-calendar")
         await self._dump(page, "06-calendar")
-        await self._set_datetime(page, when)
+        try:
+            await self._set_datetime(page, when)
+        except VkWebError:
+            # VK мог отвергнуть время как прошедшее – ещё одна попытка на 3 минуты вперёд
+            publish_at = int(time.time()) + MIN_LEAD + 60
+            publish_at -= publish_at % 60
+            when = datetime.fromtimestamp(publish_at, tz=TZ)
+            log.warning("VK-браузер: повторяю выбор времени на %s", when)
+            await self._set_datetime(page, when)
         await asyncio.sleep(1)
         await self._shot(page, "07-datetime")
 
