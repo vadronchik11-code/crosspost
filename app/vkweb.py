@@ -36,6 +36,28 @@ def has_session() -> bool:
     return STATE.is_file() and STATE.stat().st_size > 50
 
 
+_PASTE_TAGS = {"b", "strong", "i", "em", "u", "a", "br"}
+
+
+def paste_html(html: str) -> str:
+    """HTML редактора -> простой HTML для вставки в композер VK: только b/i/u/a/br, переносы как <br>."""
+    def keep(m):
+        tag = re.sub(r"[^a-z]", "", m.group(1).lower())
+        return m.group(0) if tag in _PASTE_TAGS else ""
+    out = re.sub(r"<\s*/?\s*([a-zA-Z0-9-]+)[^>]*>", keep, html or "")
+    out = re.sub(r"<(b|strong|i|em|u)\b[^>]*>", lambda m: f"<{m.group(1).lower()}>", out)
+    out = re.sub(r"""<a\b[^>]*href=["']([^"']+)["'][^>]*>""", lambda m: f'<a href="{m.group(1)}">', out)
+    return out.replace("\r\n", "\n").replace("\n", "<br>")
+
+
+def has_rich(html: str) -> bool:
+    return bool(re.search(r"<(b|strong|i|em|u|a)[\s>]", html or "", re.I))
+
+
+def link_count(html: str) -> int:
+    return len(re.findall(r"<a[\s>][^>]*href=", html or "", re.I))
+
+
 class VkWeb:
     def __init__(self):
         self._lock = asyncio.Lock()
@@ -233,14 +255,16 @@ class VkWeb:
                 pass
 
     # ---------------------------------------------------------------- отложенный пост
-    async def create_postponed(self, text: str, image_paths: list[str], publish_at: int) -> dict:
-        """Создаёт в группе отложенную запись с фото и текстом на время publish_at (unix)."""
+    async def create_postponed(self, text: str, image_paths: list[str], publish_at: int, html: str | None = None) -> dict:
+        """Создаёт в группе отложенную запись с фото и текстом на время publish_at (unix).
+        html – текст с форматированием (b/i/u/ссылки): вставляется в композер как «богатый» текст,
+        чтобы ссылки в словах и жирный появились так же, как при ручной вставке."""
         async with self._lock:
             pw, browser = await self._browser(headed=HEADED)
             try:
                 ctx = await self._context(browser, True)
                 page = await ctx.new_page()
-                return await self._compose(page, text, image_paths, publish_at)
+                return await self._compose(page, text, image_paths, publish_at, html)
             finally:
                 await browser.close(); await pw.stop()
 
@@ -263,7 +287,7 @@ class VkWeb:
         self.last_error = f"{what} (шаг {step}). Скриншот: data/vk_debug/{fn}"
         raise VkWebError(self.last_error)
 
-    async def _compose(self, page, text: str, image_paths: list[str], publish_at: int) -> dict:
+    async def _compose(self, page, text: str, image_paths: list[str], publish_at: int, html: str | None = None) -> dict:
         gid = config.VK_GROUP_ID
         await self._goto(page, f"/club{gid}")
         await asyncio.sleep(2)
@@ -342,6 +366,7 @@ class VkWeb:
             await self._shot(page, "03-photos")
 
         # 3. текст: «Напишите что-нибудь…»
+        rich_ok = False
         if text.strip():
             fld = await self._first(page, [
                 "[data-testid^='posting_base_screen_input_message'][contenteditable='true']",
@@ -351,7 +376,16 @@ class VkWeb:
             if not fld:
                 await self._fail(page, "text", "Не нашёл поле текста в окне поста")
             await fld.click()
-            await page.keyboard.type(text, delay=5)
+            if html and has_rich(html):
+                rich_ok = await self._paste_rich(page, fld, text, html)
+                if not rich_ok:
+                    log.warning("VK-браузер: вставка текста с форматированием не удалась – печатаю обычный текст")
+                    await fld.click()
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Delete")
+                    await asyncio.sleep(0.3)
+            if not rich_ok:
+                await page.keyboard.type(text, delay=5)
             await asyncio.sleep(0.5)
         await self._shot(page, "04-text")
 
@@ -433,7 +467,8 @@ class VkWeb:
         await asyncio.sleep(2)
         await self._shot(page, "08-done")
         await self._dump(page, "08-done")
-        return {"postponed": True, "publish_at": publish_at, "via": "browser", "url": f"https://vk.com/club{gid}?act=postponed"}
+        return {"postponed": True, "publish_at": publish_at, "via": "browser", "rich": rich_ok,
+                "url": f"https://vk.com/club{gid}?act=postponed"}
 
     MONTHS = ["январ", "феврал", "март", "апрел", "ма[йя]", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр"]
 
@@ -468,6 +503,47 @@ class VkWeb:
         return False
 
     GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+
+    async def _paste_rich(self, page, fld, text: str, html: str) -> bool:
+        """Вставить в поле текст с форматированием: через буфер обмена (Ctrl+V), если не вышло –
+        синтетическим событием paste. Успех = в поле есть весь текст и столько же ссылок, сколько у нас."""
+        want_links = link_count(html)
+        rich = paste_html(html)
+        norm = lambda v: re.sub(r"\s+", " ", v or "").strip()  # noqa: E731
+
+        async def check() -> bool:
+            await asyncio.sleep(0.8)
+            try:
+                got = norm(await fld.inner_text())
+                links = await fld.locator("a[href]").count()
+            except Exception:  # noqa: BLE001
+                return False
+            return got == norm(text) and links >= want_links
+
+        try:
+            await page.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=BASE)
+            await page.evaluate(
+                """async ([h, t]) => { const item = new ClipboardItem({
+                    'text/html': new Blob([h], {type: 'text/html'}), 'text/plain': new Blob([t], {type: 'text/plain'})});
+                    await navigator.clipboard.write([item]); }""", [rich, text])
+            await fld.click()
+            await page.keyboard.press("Control+V")
+            if await check():
+                return True
+        except Exception as e:  # noqa: BLE001
+            log.info("VK-браузер: вставка через буфер не сработала: %s", str(e)[:100])
+        try:
+            await fld.click()
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Delete")
+            await fld.evaluate(
+                """(el, [h, t]) => { const dt = new DataTransfer(); dt.setData('text/html', h); dt.setData('text/plain', t);
+                    el.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true})); }""", [rich, text])
+            if await check():
+                return True
+        except Exception as e:  # noqa: BLE001
+            log.info("VK-браузер: синтетическая вставка не сработала: %s", str(e)[:100])
+        return False
 
     async def _type_value(self, page, inp, value: str) -> bool:
         """Поле-выпадашка VKUI: кликаем, стираем, печатаем, выбираем совпавший пункт (или Enter), проверяем."""

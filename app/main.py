@@ -111,16 +111,25 @@ async def _publish_vk(post: dict, when_ts: int | None) -> dict:
     if paths and vkweb.has_session():
         publish_at = max(int(when_ts or 0), int(time.time()) + VK_BROWSER_DELAY)
         plain, _ = vk.html_to_vk(text)
-        res = await vkweb.manager.create_postponed(plain, paths, publish_at)
+        res = await vkweb.manager.create_postponed(plain, paths, publish_at, html=text)
         publish_at = int(res.get("publish_at") or publish_at)   # браузер мог сдвинуть время вперёд
         pid = await vk.find_postponed(plain, publish_at)
         if pid:
             res["post_id"] = pid
             res["url"] = f"https://vk.com/wall-{config.VK_GROUP_ID}_{pid}"
-            try:
-                await vk.edit_postponed(pid, text, publish_at)   # дописываем жирный/ссылки через format_data
-            except Exception as e:  # noqa: BLE001
-                log.warning("VK: форматирование не применилось: %s", e)
+        has_format = vk.html_to_vk(text)[1] is not None
+        if has_format and not res.get("rich"):
+            # ссылки/жирный не вставились в композере – пробуем дописать через API (format_data),
+            # это работает не всегда, поэтому результат фиксируем в посте
+            ok = False
+            if pid:
+                try:
+                    await vk.edit_postponed(pid, text, publish_at)
+                    ok = True
+                except Exception as e:  # noqa: BLE001
+                    log.warning("VK: форматирование не применилось: %s", e)
+            if not ok:
+                res["warning"] = "Форматирование (ссылки в словах, жирный) в VK не применилось – проверь запись в отложке VK и поправь руками"
         return res
     if paths:
         raise vk.VkError("У поста есть картинки, а сессии VK-браузера нет – войди через «VK-браузер» в шапке, иначе в VK уйдёт только текст")
@@ -135,12 +144,12 @@ async def handoff_vk(post_id: int, user: str) -> dict:
         return post
     try:
         res = await _publish_vk(post, _ts(post["scheduled_at"]))
-        upd = {"vk_status": "published", "vk_result": res, "vk_error": None}
+        upd = {"vk_status": "published", "vk_result": res, "vk_error": res.get("warning")}
         if res.get("publish_at") and res["publish_at"] > (_ts(post["scheduled_at"]) or 0):
             # VK принял время позже запрошенного (флоу в браузере занял больше 2 минут) – Telegram выйдет в то же время
             upd["scheduled_at"] = datetime.fromtimestamp(res["publish_at"], tz=timezone.utc).isoformat()
         db.update_post(post_id, upd)
-        db.add_history(post_id, user, "publish", {"platform": "vk", "url": res.get("url"), "postponed": True})
+        db.add_history(post_id, user, "publish", {"platform": "vk", "url": res.get("url"), "postponed": True, **({"warning": res["warning"]} if res.get("warning") else {})})
     except Exception as e:  # noqa: BLE001
         log.exception("Пост %s: не удалось отдать в отложку VK", post_id)
         db.update_post(post_id, {"vk_status": "error", "vk_error": str(e)})
