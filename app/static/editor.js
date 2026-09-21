@@ -236,7 +236,10 @@ const RTE = (() => {
     bubble.querySelectorAll("[data-cmd]").forEach((b) => b.classList.toggle("on", active(b.dataset.cmd)));
     const w = bubble.offsetWidth, h = bubble.offsetHeight;
     let left = rect.left + rect.width / 2 - w / 2, top = rect.top - h - 8;
-    if (top < 8) top = rect.bottom + 8;
+    // на телефоне системное меню выделения (Копировать/Вставить/BIU) висит над текстом – уходим под выделение
+    if (TOUCH) top = rect.bottom + 14;
+    if (top < 8) top = rect.bottom + 14;
+    if (top + h > innerHeight - 8) top = Math.max(8, rect.top - h - 8);
     left = Math.max(8, Math.min(left, innerWidth - w - 8));
     bubble.style.left = left + "px"; bubble.style.top = top + "px";
   }

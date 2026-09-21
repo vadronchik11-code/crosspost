@@ -517,7 +517,8 @@ img.emoji { width: 1.25em; height: 1.25em; vertical-align: -0.28em; margin: 0 0.
   .source-list button { flex: none; font-size: 13px; padding: 6px 10px; background: var(--fill); border-radius: 999px; }
   .sl-count { margin-left: 2px; }
   .sidebar { min-width: 0; }
-  .topbar { padding: 8px 12px; gap: 8px; flex-wrap: wrap; }
+  /* шапка и панель кнопок не прилипают – на телефоне важнее место под редактор */
+  .topbar { position: static; padding: 8px 12px; gap: 8px; flex-wrap: wrap; }
   .topbar .targets { gap: 6px; }
   .target { font-size: 11.5px; padding: 3px 9px; }
   .topbar .targets { order: 3; flex-basis: 100%; }
@@ -526,7 +527,7 @@ img.emoji { width: 1.25em; height: 1.25em; vertical-align: -0.28em; margin: 0 0.
   .editor-head { flex-wrap: wrap; }
   .author-line { margin-top: -6px; }
   .two-col { grid-template-columns: 1fr !important; }
-  .actions { bottom: calc(66px + env(safe-area-inset-bottom)); gap: 6px; padding: 8px; }
+  .actions { position: static; gap: 6px; padding: 8px; }
   .actions .btn { padding: 8px 10px; font-size: 13px; }
   .msg { bottom: calc(150px + env(safe-area-inset-bottom)); max-width: calc(100vw - 24px); white-space: pre-wrap; text-align: center; }
   .tabbar {
