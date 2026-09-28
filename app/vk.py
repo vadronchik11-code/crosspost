@@ -276,6 +276,11 @@ async def find_postponed(plain_text: str, publish_at: int) -> int | None:
         if abs((it.get("date") or 0) - publish_at) <= 120 and (not key or (it.get("text") or "").strip().startswith(key[:40])):
             if best is None or it["id"] > best:
                 best = it["id"]
+    if best is None:   # текст мог не совпасть (VK что-то нормализовал) – ищем запись просто по времени выхода
+        for it in items:
+            if abs((it.get("date") or 0) - publish_at) <= 120:
+                if best is None or it["id"] > best:
+                    best = it["id"]
     return best
 
 

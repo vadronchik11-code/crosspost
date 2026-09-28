@@ -454,7 +454,7 @@ class VkWeb:
         await self._shot(page, "07-datetime")
 
         # 6. закрыть открытую выпадашку минут (клик по заголовку окна), затем «Добавить в очередь»
-        await self._close_lists(page)
+        await self._close_lists(page, dialog)
         modal = page.locator("[data-testid='posting_modal_box']")
         for attempt in range(3):
             submit = await self._first(page, [
@@ -696,16 +696,21 @@ class VkWeb:
         except Exception:  # noqa: BLE001
             return False
 
-    async def _close_lists(self, page) -> None:
-        """Закрыть открытую выпадашку VKUI: клик по заголовку окна, иначе Escape."""
+    async def _close_lists(self, page, scope=None) -> None:
+        """Закрыть открытую выпадашку VKUI: клик по заголовку окна поста, иначе Escape.
+        Заголовок ищем только внутри окна: на странице сообщества «Настройки» есть и в меню справа."""
+        box = scope if scope is not None else page.locator("[data-testid='posting_modal_box']").first
         try:
-            title = page.get_by_text(re.compile(r"^\s*Настройки\s*$")).first
+            title = box.get_by_text(re.compile(r"^\s*Настройки\s*$")).first
             if await title.count() and await title.is_visible():
                 await title.click()
             else:
                 await page.keyboard.press("Escape")
         except Exception:  # noqa: BLE001
-            pass
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:  # noqa: BLE001
+                pass
         await asyncio.sleep(0.6)
 
     async def _set_datetime(self, page, when: datetime):
@@ -744,7 +749,7 @@ class VkWeb:
         m_ok = await self._type_value(page, minutes, f"{when.minute:02d}")
         if not (h_ok and m_ok):
             # список часов/минут ещё открыт – закрываем и смотрим, что в полях на самом деле
-            await self._close_lists(page)
+            await self._close_lists(page, cal)
             h_ok = self._same_value(await self._read_value(hours), f"{when.hour:02d}")
             m_ok = self._same_value(await self._read_value(minutes), f"{when.minute:02d}")
             log.info("VK-браузер: перепроверил время после закрытия списка – часы: %s, минуты: %s", h_ok, m_ok)

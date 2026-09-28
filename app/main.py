@@ -114,9 +114,16 @@ async def _publish_vk(post: dict, when_ts: int | None) -> dict:
         res = await vkweb.manager.create_postponed(plain, paths, publish_at, html=text)
         publish_at = int(res.get("publish_at") or publish_at)   # браузер мог сдвинуть время вперёд
         pid = await vk.find_postponed(plain, publish_at)
+        if not pid:   # VK иногда добавляет запись в очередь с задержкой
+            await asyncio.sleep(5)
+            pid = await vk.find_postponed(plain, publish_at)
         if pid:
             res["post_id"] = pid
             res["url"] = f"https://vk.com/wall-{config.VK_GROUP_ID}_{pid}"
+        elif config.VK_CONFIGURED:
+            # окно поста закрылось, но записи в отложке нет – молча «опубликованным» такой пост не считаем
+            raise vk.VkError("Браузер дошёл до конца, но записи нет в отложке VK – проверь очередь сообщества "
+                             "и скриншоты в data/vk_debug (08-done)")
         if vk.html_to_vk(text)[1] is not None and not res.get("rich"):
             # ссылки в словах VK принимает только из самого редактора: API-параметр format_data
             # он молча игнорирует, поэтому вместо ложного «ок» честно предупреждаем
