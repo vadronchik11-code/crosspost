@@ -240,7 +240,10 @@ class VkWeb:
             try:
                 ctx = await self._context(browser, True)
                 page = await ctx.new_page()
-                return await self._compose(page, text, image_paths, publish_at)
+                try:
+                    return await self._compose(page, text, image_paths, publish_at)
+                finally:
+                    await self._discard_draft(page)
             finally:
                 await browser.close(); await pw.stop()
 
@@ -260,6 +263,7 @@ class VkWeb:
     async def _fail(self, page, step: str, what: str):
         fn = await self._shot(page, f"fail-{step}")
         await self._dump(page, fn[:-4])
+        await self._discard_draft(page)
         self.last_error = f"{what} (шаг {step}). Скриншот: data/vk_debug/{fn}"
         raise VkWebError(self.last_error)
 
@@ -457,7 +461,8 @@ class VkWeb:
                     await o.click()
                     await asyncio.sleep(0.3)
                     return True
-            await page.keyboard.press("Escape")
+            if not await page.locator("[data-testid='posting_modal_box']").count():
+                await page.keyboard.press("Escape")   # внутри окна поста Escape закрыл бы весь пост
         except Exception:  # noqa: BLE001
             pass
         return False
@@ -504,26 +509,48 @@ class VkWeb:
             return False
 
     async def _close_lists(self, page, scope=None) -> None:
-        """Закрыть открытую выпадашку VKUI: клик по заголовку окна поста, иначе Escape.
+        """Закрыть открытую выпадашку VKUI кликом по заголовку окна поста.
+        Escape здесь нельзя: VK закрывает всё окно и спрашивает «Сохранить черновик?».
         Заголовок ищем только внутри окна: на странице сообщества «Настройки» есть и в меню справа."""
-        box = scope if scope is not None else page.locator("[data-testid='posting_modal_box']").first
+        modal = page.locator("[data-testid='posting_modal_box']").first
+        box = scope if scope is not None else modal
         try:
             title = box.get_by_text(re.compile(r"^\s*Настройки\s*$")).first
+            if not (await title.count() and await title.is_visible()):
+                title = modal.get_by_text(re.compile(r"^\s*Настройки\s*$")).first
             if await title.count() and await title.is_visible():
                 await title.click()
-            else:
-                await page.keyboard.press("Escape")
-        except Exception:  # noqa: BLE001
-            try:
-                await page.keyboard.press("Escape")
-            except Exception:  # noqa: BLE001
-                pass
+            else:   # заголовка нет – кликаем в пустое место шапки окна, но не мимо окна
+                rect = await modal.bounding_box() if await modal.count() else None
+                if rect:
+                    await page.mouse.click(rect["x"] + rect["width"] / 2, rect["y"] + 8)
+        except Exception as e:  # noqa: BLE001
+            log.info("VK-браузер: не закрыл выпадашку: %s", str(e)[:80])
         await asyncio.sleep(0.6)
+
+    async def _discard_draft(self, page) -> None:
+        """Если VK спросил «Сохранить черновик?» – уходим без сохранения, чтобы не копить черновики."""
+        try:
+            btn = page.get_by_text(re.compile(r"Выйти без сохранения", re.I)).first
+            if await btn.count() and await btn.is_visible():
+                await btn.click()
+                await asyncio.sleep(1)
+                log.info("VK-браузер: закрыл окно поста без сохранения черновика")
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _set_datetime(self, page, when: datetime):
         """Календарь VK (posting_postponed_calendar): листаем месяцы стрелкой, кликаем день, печатаем часы и минуты."""
         cal = page.locator("[data-testid='posting_postponed_calendar']")
-        if not await cal.count():
+        for _ in range(20):   # VK рисует календарь не мгновенно – ждём до 10 секунд
+            if await cal.count() and await cal.first.is_visible():
+                break
+            if await page.locator("[data-testid='posting_postponed_calendar_hours']").count():
+                cal = page.locator("[data-testid='posting_modal_box']").first
+                break
+            await asyncio.sleep(0.5)
+        else:
+            log.warning("VK-браузер: календаря с привычными testid нет – пробую общий разбор")
             await self._set_datetime_generic(page, when)
             return
         month_in = cal.locator("[data-testid='posting_postponed_calendar_month_dropdown']")
