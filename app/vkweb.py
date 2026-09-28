@@ -233,8 +233,9 @@ class VkWeb:
                 pass
 
     # ---------------------------------------------------------------- отложенный пост
-    async def create_postponed(self, text: str, image_paths: list[str], publish_at: int) -> dict:
-        """Создаёт в группе отложенную запись с фото и текстом на время publish_at (unix)."""
+    async def create_postponed(self, text: str, image_paths: list[str], publish_at: int | None) -> dict:
+        """Создаёт пост с фото и текстом: publish_at=None – публикует сразу кнопкой «Опубликовать»,
+        иначе кладёт в отложку VK на это время (unix)."""
         async with self._lock:
             pw, browser = await self._browser(headed=HEADED)
             try:
@@ -267,7 +268,7 @@ class VkWeb:
         self.last_error = f"{what} (шаг {step}). Скриншот: data/vk_debug/{fn}"
         raise VkWebError(self.last_error)
 
-    async def _compose(self, page, text: str, image_paths: list[str], publish_at: int) -> dict:
+    async def _compose(self, page, text: str, image_paths: list[str], publish_at: int | None) -> dict:
         gid = config.VK_GROUP_ID
         await self._goto(page, f"/club{gid}")
         await asyncio.sleep(2)
@@ -368,8 +369,17 @@ class VkWeb:
         await self._shot(page, "05-settings")
         await self._dump(page, "05-settings")
 
-        # 5. «Запланировать» → календарь. Время считаем заново здесь: до этого шага (открытие VK,
-        # загрузка фото) могло пройти больше 2 минут, и VK не примет уже наступивший час/минуту.
+        # 5. «Запланировать» → календарь. Нужен только для отложки: «опубликовать сейчас» жмёт
+        # обычную кнопку «Опубликовать» и не открывает календарь вовсе.
+        if publish_at is None:
+            await self._submit(page, dialog, [
+                "[data-testid='posting_submit_button']",
+                dialog.get_by_role("button", name=re.compile(r"^\s*Опубликовать\s*$", re.I)),
+            ], "Опубликовать")
+            return {"postponed": False, "publish_at": int(time.time()), "via": "browser",
+                    "url": f"https://vk.com/club{gid}"}
+        # Время считаем заново здесь: до этого шага (открытие VK, загрузка фото) могло пройти
+        # больше двух минут, и VK не примет уже наступивший час/минуту.
         floor = int(time.time()) + MIN_LEAD
         if publish_at < floor:
             publish_at = floor - floor % 60 + 60   # следующая целая минута
@@ -400,36 +410,11 @@ class VkWeb:
 
         # 6. закрыть открытую выпадашку минут (клик по заголовку окна), затем «Добавить в очередь»
         await self._close_lists(page, dialog)
-        modal = page.locator("[data-testid='posting_modal_box']")
-        for attempt in range(3):
-            submit = await self._first(page, [
-                "[data-testid='posting_postponed_publish_button']",
-                page.get_by_role("button", name=re.compile(r"Добавить в очередь|В очередь", re.I)),
-                page.get_by_text(re.compile(r"Добавить в очередь", re.I)),
-            ], 5000)
-            if not submit:
-                await self._fail(page, "submit", "Не нашёл кнопку «Добавить в очередь»")
-            await submit.click()
-            # успех = окно поста закрылось
-            for _ in range(20):
-                await asyncio.sleep(1)
-                if not await modal.count() or not await modal.first.is_visible():
-                    break
-            else:
-                err = await self._first(page, [page.get_by_text(re.compile("ошибка|не удалось|слишком|нельзя", re.I))], 800)
-                if err:
-                    try:
-                        msg = (await err.inner_text()).strip()[:200]
-                    except Exception:  # noqa: BLE001
-                        msg = "VK показал ошибку"
-                    await self._fail(page, "vk-error", msg)
-                await self._shot(page, f"08-retry{attempt}")
-                continue
-            break
-        else:
-            await self._fail(page, "submit-stuck", "Нажал «Добавить в очередь», но окно поста не закрылось – VK не принял запись")
-        await asyncio.sleep(2)
-        await self._shot(page, "08-done")
+        await self._submit(page, dialog, [
+            "[data-testid='posting_postponed_publish_button']",
+            page.get_by_role("button", name=re.compile(r"Добавить в очередь|В очередь", re.I)),
+            page.get_by_text(re.compile(r"Добавить в очередь", re.I)),
+        ], "Добавить в очередь")
         await self._dump(page, "08-done")
         return {"postponed": True, "publish_at": publish_at, "via": "browser",
                 "url": f"https://vk.com/club{gid}?act=postponed"}
@@ -508,6 +493,36 @@ class VkWeb:
         except Exception:  # noqa: BLE001
             return False
 
+    async def _submit(self, page, dialog, candidates: list, label: str) -> None:
+        """Нажать кнопку публикации и дождаться, пока окно поста закроется. Успех = окна больше нет."""
+        modal = page.locator("[data-testid='posting_modal_box']")
+        for attempt in range(3):
+            btn = await self._first(page, candidates, 6000)
+            if not btn:
+                await self._fail(page, "submit", f"Не нашёл кнопку «{label}»")
+            await self._close_lists(page, dialog)   # открытая выпадашка перехватывает клик
+            try:
+                await btn.click(timeout=8000)
+            except Exception as e:  # noqa: BLE001
+                log.warning("VK-браузер: клик по «%s» не прошёл (%s) – пробую ещё раз", label, str(e)[:80])
+                await self._shot(page, f"08-click{attempt}")
+                continue
+            for _ in range(20):
+                await asyncio.sleep(1)
+                if not await modal.count() or not await modal.first.is_visible():
+                    await asyncio.sleep(2)
+                    await self._shot(page, "08-done")
+                    return
+            err = await self._first(page, [page.get_by_text(re.compile("ошибка|не удалось|слишком|нельзя", re.I))], 800)
+            if err:
+                try:
+                    msg = (await err.inner_text()).strip()[:200]
+                except Exception:  # noqa: BLE001
+                    msg = "VK показал ошибку"
+                await self._fail(page, "vk-error", msg)
+            await self._shot(page, f"08-retry{attempt}")
+        await self._fail(page, "submit-stuck", f"Нажал «{label}», но окно поста не закрылось – VK не принял запись")
+
     async def _close_lists(self, page, scope=None) -> None:
         """Закрыть открытую выпадашку VKUI кликом по заголовку окна поста.
         Escape здесь нельзя: VK закрывает всё окно и спрашивает «Сохранить черновик?».
@@ -519,11 +534,17 @@ class VkWeb:
             if not (await title.count() and await title.is_visible()):
                 title = modal.get_by_text(re.compile(r"^\s*Настройки\s*$")).first
             if await title.count() and await title.is_visible():
-                await title.click()
-            else:   # заголовка нет – кликаем в пустое место шапки окна, но не мимо окна
-                rect = await modal.bounding_box() if await modal.count() else None
-                if rect:
-                    await page.mouse.click(rect["x"] + rect["width"] / 2, rect["y"] + 8)
+                await title.click(timeout=2500)
+                await asyncio.sleep(0.6)
+                return
+        except Exception as e:  # noqa: BLE001
+            log.info("VK-браузер: клик по заголовку не прошёл (%s) – кликаю по подложке", str(e)[:60])
+        # заголовок перекрыт (VKUI вешает поверх окна подложку) – клик мышью по координатам:
+        # событие получит верхний слой, а это и есть подложка, которая закрывает выпадашку
+        try:
+            rect = await modal.bounding_box() if await modal.count() else None
+            if rect:
+                await page.mouse.click(rect["x"] + rect["width"] / 2, rect["y"] + 8)
         except Exception as e:  # noqa: BLE001
             log.info("VK-браузер: не закрыл выпадашку: %s", str(e)[:80])
         await asyncio.sleep(0.6)

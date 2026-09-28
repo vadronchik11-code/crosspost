@@ -620,13 +620,18 @@ $("#scheduleBtn").addEventListener("click", async () => {
   if (s) showMsg(`В отложке: выйдет ${fmtDate(s.scheduled_at)}`);
 });
 $("#publishBtn").addEventListener("click", async () => {
-  if (!confirm("Опубликовать сейчас? Пост уйдёт в отложку и выйдет через 2 минуты, время в поле «Когда публиковать» не учитывается.")) return;
-  const d = new Date(Date.now() + 2 * 60 * 1000); d.setSeconds(0, 0);
-  F.scheduled_at.value = toLocalInput(d.toISOString());
-  const b = $("#publishBtn"), label = b.textContent; b.textContent = "Публикую…";
-  const s = await save("scheduled");
-  b.textContent = label;
-  if (s) showMsg(`Уйдёт через 2 минуты, в ${fmtDate(s.scheduled_at)}`);
+  if (!confirm("Опубликовать сейчас? Пост выйдет сразу, время в поле «Когда публиковать» не учитывается.")) return;
+  const b = $("#publishBtn"), label = b.textContent;
+  const saved = await save("draft");
+  if (!saved) return;
+  b.textContent = "Публикую…"; setBusy(true); showMsg("Публикую – VK занимает до минуты, не нажимай повторно");
+  try {
+    const res = await api(`/posts/${saved.id}/publish`, { method: "POST" });
+    await loadPosts(); await openPost(res);
+    const errs = ["vk", "tg"].filter(pl => res[`${pl}_status`] === "error");
+    showMsg(errs.length ? errs.map(pl => `${pl.toUpperCase()}: ${res[`${pl}_error`]}`).join("\n") : "Опубликовано", !!errs.length);
+  } catch (e) { showMsg(e.message, true); }
+  finally { b.textContent = label; setBusy(false); }
 });
 $("#deleteBtn").addEventListener("click", async () => {
   const p = state.current; if (!p.id || !confirm("Удалить пост? На площадках он останется.")) return;

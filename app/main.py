@@ -109,8 +109,10 @@ async def _publish_vk(post: dict, when_ts: int | None) -> dict:
     paths = _image_paths(post, "vk")
     text = post["vk_text"] or ""
     if paths and vkweb.has_session():
-        publish_at = max(int(when_ts or 0), int(time.time()) + VK_BROWSER_DELAY)
         plain = vk.wall_text(text)
+        if not when_ts:   # «Опубликовать сейчас» – браузер жмёт «Опубликовать», без отложки и ожидания
+            return await vkweb.manager.create_postponed(plain, paths, None)
+        publish_at = max(int(when_ts), int(time.time()) + VK_BROWSER_DELAY)
         res = await vkweb.manager.create_postponed(plain, paths, publish_at)
         publish_at = int(res.get("publish_at") or publish_at)   # браузер мог сдвинуть время вперёд
         pid, checked = await vk.find_postponed(plain, publish_at)
@@ -249,8 +251,11 @@ async def sync_post(post_id: int, user: str) -> dict:
                         when = _ts(post["scheduled_at"]) if post["status"] == "scheduled" else None
                         res = await vk.edit_postponed(int(result["post_id"]), post["vk_text"] or "", when)
                         db.update_post(post_id, {"vk_result": {**result, **res}})
-                    else:
+                    elif result.get("post_id"):
                         await vk.edit(int(result["post_id"]), post["vk_text"] or "", [])
+                    else:
+                        raise vk.VkError("Пост выложен через браузер, id записи VK неизвестен (ключу сообщества "
+                                         "недоступен wall.get) – поправь запись в VK руками")
                 elif result.get("scheduled"):
                     # ещё не вышло: снимаем с отложки и кладём заново с новым текстом/фото/временем
                     when = _ts(post["scheduled_at"]) if post["status"] == "scheduled" else result.get("when")
