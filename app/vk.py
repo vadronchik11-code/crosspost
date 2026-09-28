@@ -192,11 +192,30 @@ def html_to_vk(html: str) -> tuple[str, dict | None]:
     return text, ({"version": "1", "items": p.items} if p.items else None)
 
 
+def wall_text(html: str) -> str:
+    """Текст для стены VK. В постах VK нет ни форматирования, ни ссылок в словах (поле ввода –
+    обычный текст, а format_data в API игнорируется), поэтому адрес дописываем рядом со словом:
+    «регистрация» -> «регистрация (https://…)». Ссылку, которая и так адрес, не трогаем."""
+    plain, fmt = html_to_vk(html or "")
+    items = [i for i in (fmt or {}).get("items", []) if i.get("type") == "url" and i.get("url")]
+    out, shift = plain, 0
+    for it in sorted(items, key=lambda i: i["offset"]):
+        word = plain[it["offset"]:it["offset"] + it["length"]].strip()
+        url = it["url"].strip()
+        if not word or word.rstrip("/") == url.rstrip("/") or url in plain:
+            continue
+        at = it["offset"] + it["length"] + shift
+        add = f" ({url})"
+        out = out[:at] + add + out[at:]
+        shift += len(add)
+    return out
+
+
 async def publish(text: str, image_paths: list[str]) -> dict:
     """text – HTML из редактора; VK получает чистый текст + format_data."""
     if not config.VK_CONFIGURED:
         raise VkError("VK_TOKEN / VK_GROUP_ID не заданы в .env")
-    message, format_data = html_to_vk(text)
+    message = wall_text(text)
     if not message.strip() and not image_paths:
         raise VkError("Пустой пост")
     async with httpx.AsyncClient(trust_env=False, timeout=90) as client:
@@ -204,8 +223,6 @@ async def publish(text: str, image_paths: list[str]) -> dict:
             raise VkError(GROUP_PHOTO_ERROR)
         attachments = [await upload_wall_photo(client, p) for p in image_paths]
         params = {"owner_id": f"-{config.VK_GROUP_ID}", "from_group": 1, "message": message}
-        if format_data:
-            params["format_data"] = json.dumps(format_data, ensure_ascii=False)
         if attachments:
             params["attachments"] = ",".join(attachments)
         res = await call(client, "wall.post", **params)
@@ -217,7 +234,7 @@ async def edit(post_id: int, text: str, image_paths: list[str]) -> dict:
     """Правит уже опубликованный пост: wall.edit заменяет текст и вложения целиком."""
     if not config.VK_CONFIGURED:
         raise VkError("VK_TOKEN / VK_GROUP_ID не заданы в .env")
-    message, format_data = html_to_vk(text)
+    message = wall_text(text)
     if not message.strip() and not image_paths:
         raise VkError("Пустой пост")
     async with httpx.AsyncClient(trust_env=False, timeout=90) as client:
@@ -225,8 +242,6 @@ async def edit(post_id: int, text: str, image_paths: list[str]) -> dict:
             raise VkError(GROUP_PHOTO_ERROR)
         attachments = [await upload_wall_photo(client, p) for p in image_paths]
         params = {"owner_id": f"-{config.VK_GROUP_ID}", "post_id": post_id, "message": message}
-        if format_data:
-            params["format_data"] = json.dumps(format_data, ensure_ascii=False)
         params["attachments"] = ",".join(attachments) if attachments else ""
         await call(client, "wall.edit", **params)
         return {"post_id": post_id, "url": f"https://vk.com/wall-{config.VK_GROUP_ID}_{post_id}"}
@@ -286,7 +301,7 @@ async def find_postponed(plain_text: str, publish_at: int) -> int | None:
 
 async def edit_postponed(post_id: int, text: str, publish_at: int | None) -> dict:
     """Меняем текст/время отложенной записи, фото передаём явно – иначе wall.edit их снимет."""
-    message, format_data = html_to_vk(text)
+    message = wall_text(text)
     async with httpx.AsyncClient(trust_env=False, timeout=60) as client:
         it = next((x for x in await _postponed_items(client) if x["id"] == post_id), None)
         if not it:
@@ -294,8 +309,6 @@ async def edit_postponed(post_id: int, text: str, publish_at: int | None) -> dic
         atts = [x for x in (_att_string(a) for a in it.get("attachments") or []) if x]
         params = {"owner_id": f"-{config.VK_GROUP_ID}", "post_id": post_id, "message": message, "attachments": ",".join(atts)}
         params["publish_date"] = max(int(publish_at or it.get("date") or 0), int(time.time()) + 90)
-        if format_data:
-            params["format_data"] = json.dumps(format_data, ensure_ascii=False)
         await call(client, "wall.edit", **params)
         after = next((x for x in await _postponed_items(client) if x["id"] == post_id), None)
         if after is not None and it.get("attachments") and not after.get("attachments"):

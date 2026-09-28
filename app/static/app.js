@@ -694,6 +694,11 @@ function renderPreviews() {
     </div>`;
   $("#previewVk .slot").appendChild(F.vk_text);
   $(".vk-phone").classList.toggle("off", !p.vk_enabled);
+  // VK не умеет ссылки в словах и форматирование: показываем, как текст выйдет на самом деле
+  const vkLinks = [...(F.vk_text.querySelectorAll("a[href]") || [])].map(a => a.getAttribute("href"));
+  $("#vkLinkNote").innerHTML = vkLinks.length
+    ? `<b>В VK нет ссылок в словах и жирного</b> – выйдет как «слово (${esc(vkLinks[0])})», адрес допишется рядом.`
+    : "Выдели текст – панель: жирный, курсив, подчёркнутый, ссылка.";
 
   // ---- Telegram: экран канала
   const tgName = t?.tg?.info?.name || "Канал";
