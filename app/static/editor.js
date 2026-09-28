@@ -11,7 +11,7 @@ const RTE = (() => {
   };
   const CMDS = {
     tg: ["bold", "italic", "underline", "strike", "quote", "code", "spoiler", "link", "clear"],
-    vk: ["bold", "italic", "underline", "link", "clear"],
+    vk: ["link", "clear"],   // в постах VK нет форматирования – только ссылки (и то словом лишь на страницы VK)
     common: ["bold", "italic", "underline", "strike", "link", "clear"],
     plain: [],
   };
@@ -208,7 +208,7 @@ const RTE = (() => {
   const TOUCH = matchMedia("(hover: none)").matches;
   const LINK_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7.1 0l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7"/></svg>`;
   const BUBBLE = {
-    vk: `<button data-cmd="bold" title="Жирный (Ctrl+B)"><b>Ж</b></button><button data-cmd="italic" title="Курсив (Ctrl+I)"><i>К</i></button><button data-cmd="underline" title="Подчёркнутый (Ctrl+U)"><u>Ч</u></button><button data-cmd="link" title="Ссылка (Ctrl+K)">${LINK_SVG}</button>`,
+    vk: `<button data-cmd="link" title="Ссылка (Ctrl+K)">${LINK_SVG}</button><button data-cmd="clear" title="Убрать ссылку">✕</button>`,
     common: `<button data-cmd="bold" title="Жирный (Ctrl+B)"><b>Ж</b></button><button data-cmd="italic" title="Курсив (Ctrl+I)"><i>К</i></button><button data-cmd="underline" title="Подчёркнутый (Ctrl+U)"><u>Ч</u></button><button data-cmd="strike" title="Зачёркнутый (Ctrl+Shift+X)"><s>З</s></button><button data-cmd="link" title="Ссылка (Ctrl+K)">${LINK_SVG}</button>`,
     tg: `<button data-cmd="bold"><b>Ж</b></button><button data-cmd="italic"><i>К</i></button><button data-cmd="underline"><u>Ч</u></button><button data-cmd="strike"><s>З</s></button><button data-cmd="link">${LINK_SVG}</button><button data-cmd="more">⋯</button>`,
   };

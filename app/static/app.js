@@ -696,9 +696,12 @@ function renderPreviews() {
   $(".vk-phone").classList.toggle("off", !p.vk_enabled);
   // VK не умеет ссылки в словах и форматирование: показываем, как текст выйдет на самом деле
   const vkLinks = [...(F.vk_text.querySelectorAll("a[href]") || [])].map(a => a.getAttribute("href"));
+  const vkPage = vkLinks.find(h => /^https?:\/\/(m\.)?vk\.(com|ru)\/[A-Za-z0-9_.]{2,64}\/?$/i.test(h || ""));
+  const vkOuter = vkLinks.find(h => h && h !== vkPage);
   $("#vkLinkNote").innerHTML = vkLinks.length
-    ? `<b>В VK нет ссылок в словах и жирного</b> – выйдет как «слово (${esc(vkLinks[0])})», адрес допишется рядом.`
-    : "Выдели текст – панель: жирный, курсив, подчёркнутый, ссылка.";
+    ? `В VK нет жирного и курсива. Ссылка словом работает только на страницы VK${vkPage ? " – такая у тебя есть, она выйдет словом" : ""}.`
+      + (vkOuter ? ` Внешний адрес допишется рядом: «слово (${esc(vkOuter)})».` : "")
+    : "В постах VK нет форматирования – только текст и ссылки. Выдели слово, чтобы поставить ссылку.";
 
   // ---- Telegram: экран канала
   const tgName = t?.tg?.info?.name || "Канал";

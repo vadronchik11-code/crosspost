@@ -113,17 +113,20 @@ async def _publish_vk(post: dict, when_ts: int | None) -> dict:
         plain = vk.wall_text(text)
         res = await vkweb.manager.create_postponed(plain, paths, publish_at)
         publish_at = int(res.get("publish_at") or publish_at)   # браузер мог сдвинуть время вперёд
-        pid = await vk.find_postponed(plain, publish_at)
-        if not pid:   # VK иногда добавляет запись в очередь с задержкой
+        pid, checked = await vk.find_postponed(plain, publish_at)
+        if checked and not pid:   # VK иногда добавляет запись в очередь с задержкой
             await asyncio.sleep(5)
-            pid = await vk.find_postponed(plain, publish_at)
+            pid, checked = await vk.find_postponed(plain, publish_at)
         if pid:
             res["post_id"] = pid
             res["url"] = f"https://vk.com/wall-{config.VK_GROUP_ID}_{pid}"
-        elif config.VK_CONFIGURED:
-            # окно поста закрылось, но записи в отложке нет – молча «опубликованным» такой пост не считаем
+        elif checked:
+            # отложку прочитать смогли, а записи в ней нет – значит VK её не принял
             raise vk.VkError("Браузер дошёл до конца, но записи нет в отложке VK – проверь очередь сообщества "
                              "и скриншоты в data/vk_debug (08-done)")
+        else:
+            # ключ сообщества не даёт читать отложку: id записи неизвестен, правки к ней будут недоступны
+            res["url"] = f"https://vk.com/wall-{config.VK_GROUP_ID}?postponed=1"
         return res
     if paths:
         raise vk.VkError("У поста есть картинки, а сессии VK-браузера нет – войди через «VK-браузер» в шапке, иначе в VK уйдёт только текст")

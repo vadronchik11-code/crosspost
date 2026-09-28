@@ -1,6 +1,8 @@
 """Публикация в сообщество VK: загрузка фото на стену + wall.post."""
 import asyncio
 import json
+import logging
+import re
 import time
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, unquote, urlparse
@@ -8,6 +10,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 
 from . import config
+
+log = logging.getLogger("vk")
 
 # VK всегда напрямую: trust_env=False игнорирует HTTP(S)_PROXY, а xray (TG_VLESS) сюда не подключён вовсе
 API = "https://api.vk.com/method/"
@@ -192,21 +196,43 @@ def html_to_vk(html: str) -> tuple[str, dict | None]:
     return text, ({"version": "1", "items": p.items} if p.items else None)
 
 
+# страница внутри VK: vk.com/club123, vk.com/id1, vk.com/techconnect – такие ссылки VK умеет
+# показывать словом через разметку [screen_name|слово] (проверено на живой отложке)
+_VK_PAGE = re.compile(r"^https?://(?:m\.)?vk\.(?:com|ru)/([A-Za-z0-9_.]{2,64})/?$", re.I)
+_NOT_PAGE = re.compile(r"^(wall|photo|video|audio|topic|market|album|away|feed|search|im)", re.I)
+
+
+def vk_mention(url: str) -> str | None:
+    """screen_name для разметки [screen|слово], если ссылка ведёт на страницу внутри VK."""
+    m = _VK_PAGE.match((url or "").strip())
+    if not m or _NOT_PAGE.match(m.group(1)):
+        return None
+    return m.group(1)
+
+
 def wall_text(html: str) -> str:
-    """Текст для стены VK. В постах VK нет ни форматирования, ни ссылок в словах (поле ввода –
-    обычный текст, а format_data в API игнорируется), поэтому адрес дописываем рядом со словом:
-    «регистрация» -> «регистрация (https://…)». Ссылку, которая и так адрес, не трогаем."""
+    """Текст для стены VK. Форматирования (жирный/курсив) в постах VK нет вовсе – проверено на живом
+    редакторе и на записи в отложке. Ссылка словом работает только на страницы VK: её пишем
+    разметкой [screen|слово]. Внешний адрес дописываем рядом: «регистрация (https://…)»."""
     plain, fmt = html_to_vk(html or "")
     items = [i for i in (fmt or {}).get("items", []) if i.get("type") == "url" and i.get("url")]
     out, shift = plain, 0
     for it in sorted(items, key=lambda i: i["offset"]):
         word = plain[it["offset"]:it["offset"] + it["length"]].strip()
-        url = it["url"].strip()
-        if not word or word.rstrip("/") == url.rstrip("/") or url in plain:
+        url = (it.get("url") or "").strip()
+        if not word:
             continue
-        at = it["offset"] + it["length"] + shift
+        start, end = it["offset"] + shift, it["offset"] + it["length"] + shift
+        screen = vk_mention(url)
+        if screen:
+            rep = f"[{screen}|{word}]"
+            out = out[:start] + rep + out[end:]
+            shift += len(rep) - it["length"]
+            continue
+        if word.rstrip("/") == url.rstrip("/") or url in plain:
+            continue
         add = f" ({url})"
-        out = out[:at] + add + out[at:]
+        out = out[:end] + add + out[end:]
         shift += len(add)
     return out
 
@@ -276,16 +302,18 @@ async def _postponed_items(client: httpx.AsyncClient) -> list[dict]:
     return got.get("items", [])
 
 
-async def find_postponed(plain_text: str, publish_at: int) -> int | None:
-    """Ищем только что созданную браузером запись по времени выхода и тексту."""
+async def find_postponed(plain_text: str, publish_at: int) -> tuple[int | None, bool]:
+    """(id записи, смогли ли вообще прочитать отложку). Ключу сообщества VK часто не даёт wall.get –
+    тогда проверить нечем, и отсутствие id не значит, что записи нет."""
     if not config.VK_CONFIGURED:
-        return None
+        return None, False
     key = (plain_text or "").strip()[:80]
     async with httpx.AsyncClient(trust_env=False, timeout=30) as client:
         try:
             items = await _postponed_items(client)
-        except VkError:
-            return None
+        except VkError as e:
+            log.info("VK: отложку прочитать нельзя (%s)", str(e)[:90])
+            return None, False
     best = None
     for it in items:
         if abs((it.get("date") or 0) - publish_at) <= 120 and (not key or (it.get("text") or "").strip().startswith(key[:40])):
@@ -296,7 +324,7 @@ async def find_postponed(plain_text: str, publish_at: int) -> int | None:
             if abs((it.get("date") or 0) - publish_at) <= 120:
                 if best is None or it["id"] > best:
                     best = it["id"]
-    return best
+    return best, True
 
 
 async def edit_postponed(post_id: int, text: str, publish_at: int | None) -> dict:
