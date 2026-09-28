@@ -338,7 +338,14 @@ async def logout(response: Response):
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    """Отдаём index.html, дописывая к css/js версию из времени файла: иначе браузер
+    держит старый app.js и после обновления сайта работает по-старому."""
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    for name in ("style.css", "app.js", "editor.js", "emoji.js"):
+        f = STATIC_DIR / name
+        if f.exists():
+            html = html.replace(f"/static/{name}", f"/static/{name}?v={int(f.stat().st_mtime)}")
+    return Response(html, media_type="text/html; charset=utf-8")
 
 
 # ---------------------------------------------------------------- me / users

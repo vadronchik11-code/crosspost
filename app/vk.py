@@ -154,29 +154,32 @@ class _VkFormat(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
-        self.pos = 0
-        self.stack: list[tuple[str, int, str | None]] = []
+        self.pos = 0     # в кодовых единицах UTF-16 – так их считает VK
+        self.cpos = 0    # в символах Python – по ним режем текст сами (эмодзи занимают 2 единицы UTF-16)
+        self.stack: list[tuple[str, int, int, str | None]] = []
         self.items: list[dict] = []
 
     def _emit(self, s: str):
         self.parts.append(s)
         self.pos += len(s.encode("utf-16-le")) // 2
+        self.cpos += len(s)
 
     def handle_starttag(self, tag, attrs):
         if tag == "br":
             self._emit("\n")
         elif tag in self.TAGS:
-            self.stack.append((self.TAGS[tag], self.pos, None))
+            self.stack.append((self.TAGS[tag], self.pos, self.cpos, None))
         elif tag == "a":
-            self.stack.append(("url", self.pos, dict(attrs).get("href")))
+            self.stack.append(("url", self.pos, self.cpos, dict(attrs).get("href")))
 
     def handle_endtag(self, tag):
         kind = self.TAGS.get(tag) or ("url" if tag == "a" else None)
         for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i][0] == kind:
-                _, start, url = self.stack.pop(i)
+                _, start, cstart, url = self.stack.pop(i)
                 if self.pos > start:
-                    item = {"type": kind, "offset": start, "length": self.pos - start}
+                    item = {"type": kind, "offset": start, "length": self.pos - start,
+                            "cp_offset": cstart, "cp_length": self.cpos - cstart}
                     if kind == "url":
                         if not url:
                             continue
@@ -217,18 +220,21 @@ def wall_text(html: str) -> str:
     plain, fmt = html_to_vk(html or "")
     items = [i for i in (fmt or {}).get("items", []) if i.get("type") == "url" and i.get("url")]
     out, shift = plain, 0
-    for it in sorted(items, key=lambda i: i["offset"]):
-        word = plain[it["offset"]:it["offset"] + it["length"]].strip()
+    for it in sorted(items, key=lambda i: i["cp_offset"]):
+        off, ln = it["cp_offset"], it["cp_length"]   # в символах: эмодзи не сдвигают границы слова
+        word = plain[off:off + ln].strip()
         url = (it.get("url") or "").strip()
         if not word:
             continue
-        start, end = it["offset"] + shift, it["offset"] + it["length"] + shift
+        start, end = off + shift, off + ln + shift
         screen = vk_mention(url)
         if screen:
             rep = f"[{screen}|{word}]"
             out = out[:start] + rep + out[end:]
-            shift += len(rep) - it["length"]
+            shift += len(rep) - ln
             continue
+        if word.startswith(("#", "@")):
+            continue   # хэштег и упоминание VK делает ссылкой сам
         if word.rstrip("/") == url.rstrip("/") or url in plain:
             continue
         add = f" ({url})"
