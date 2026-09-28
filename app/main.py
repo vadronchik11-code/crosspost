@@ -117,19 +117,12 @@ async def _publish_vk(post: dict, when_ts: int | None) -> dict:
         if pid:
             res["post_id"] = pid
             res["url"] = f"https://vk.com/wall-{config.VK_GROUP_ID}_{pid}"
-        has_format = vk.html_to_vk(text)[1] is not None
-        if has_format and not res.get("rich"):
-            # ссылки/жирный не вставились в композере – пробуем дописать через API (format_data),
-            # это работает не всегда, поэтому результат фиксируем в посте
-            ok = False
-            if pid:
-                try:
-                    await vk.edit_postponed(pid, text, publish_at)
-                    ok = True
-                except Exception as e:  # noqa: BLE001
-                    log.warning("VK: форматирование не применилось: %s", e)
-            if not ok:
-                res["warning"] = "Форматирование (ссылки в словах, жирный) в VK не применилось – проверь запись в отложке VK и поправь руками"
+        if vk.html_to_vk(text)[1] is not None and not res.get("rich"):
+            # ссылки в словах VK принимает только из самого редактора: API-параметр format_data
+            # он молча игнорирует, поэтому вместо ложного «ок» честно предупреждаем
+            res["warning"] = ("Форматирование (ссылки в словах, жирный) в VK не применилось – "
+                              "открой запись в отложке VK и поправь руками")
+            log.warning("Пост в VK ушёл без форматирования: %s", res.get("url"))
         return res
     if paths:
         raise vk.VkError("У поста есть картинки, а сессии VK-браузера нет – войди через «VK-браузер» в шапке, иначе в VK уйдёт только текст")

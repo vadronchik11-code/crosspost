@@ -58,6 +58,23 @@ def link_count(html: str) -> int:
     return len(re.findall(r"<a[\s>][^>]*href=", html or "", re.I))
 
 
+def link_spans(html: str) -> list[tuple[str, int, str]]:
+    """[(слово, номер вхождения этого слова в тексте, url)] – чтобы навесить ссылки руками в композере VK."""
+    from .vk import html_to_vk
+    plain, fmt = html_to_vk(html or "")
+    flat = plain.replace("\n", "")
+    out = []
+    for it in (fmt or {}).get("items", []):
+        if it.get("type") != "url" or not it.get("url"):
+            continue
+        word = plain[it["offset"]:it["offset"] + it["length"]]
+        if not word.strip() or "\n" in word:
+            continue
+        before = plain[:it["offset"]].replace("\n", "")
+        out.append((word, before.count(word) + 1, it["url"]))
+    return out
+
+
 class VkWeb:
     def __init__(self):
         self._lock = asyncio.Lock()
@@ -387,6 +404,15 @@ class VkWeb:
             if not rich_ok:
                 await page.keyboard.type(text, delay=5)
             await asyncio.sleep(0.5)
+            spans = link_spans(html or "")
+            if spans and await fld.locator("a[href]").count() < len(spans):
+                # вставка не донесла ссылки – ставим их так же, как человек: выделение + кнопка «Ссылка»
+                log.info("VK-браузер: ставлю %s ссылок через панель форматирования", len(spans))
+                rich_ok = await self._apply_links_ui(page, fld, spans)
+            links_in_field = await fld.locator("a[href]").count()
+            if spans and not links_in_field:
+                await self._dump(page, "04-text-nolinks")
+            rich_ok = rich_ok and (not spans or links_in_field >= len(spans))
         await self._shot(page, "04-text")
 
         # 4. «Далее» → «Настройки»
@@ -521,7 +547,10 @@ class VkWeb:
             return got == norm(text) and links >= want_links
 
         try:
-            await page.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=BASE)
+            origin = re.match(r"https?://[^/]+", page.url)
+            await page.context.grant_permissions(
+                ["clipboard-read", "clipboard-write"], origin=origin.group(0) if origin else BASE)
+            await page.bring_to_front()   # navigator.clipboard требует, чтобы документ был в фокусе
             await page.evaluate(
                 """async ([h, t]) => { const item = new ClipboardItem({
                     'text/html': new Blob([h], {type: 'text/html'}), 'text/plain': new Blob([t], {type: 'text/plain'})});
@@ -532,6 +561,29 @@ class VkWeb:
                 return True
         except Exception as e:  # noqa: BLE001
             log.info("VK-браузер: вставка через буфер не сработала: %s", str(e)[:100])
+        try:  # копирование без разрешений: обработчик copy кладёт в буфер наш HTML
+            await fld.click()
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Delete")
+            await page.evaluate(
+                """([h, t]) => { const on = (e) => { e.clipboardData.setData('text/html', h);
+                        e.clipboardData.setData('text/plain', t); e.preventDefault(); };
+                    document.addEventListener('copy', on, true);
+                    const d = document.createElement('div'); d.textContent = t;
+                    d.setAttribute('contenteditable', 'true');
+                    d.style.cssText = 'position:fixed;left:-9999px;top:0;';
+                    document.body.appendChild(d);
+                    const r = document.createRange(); r.selectNodeContents(d);
+                    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+                    document.execCommand('copy');
+                    sel.removeAllRanges(); d.remove(); document.removeEventListener('copy', on, true); }""",
+                [rich, text])
+            await fld.click()
+            await page.keyboard.press("Control+V")
+            if await check():
+                return True
+        except Exception as e:  # noqa: BLE001
+            log.info("VK-браузер: копирование через execCommand не сработало: %s", str(e)[:100])
         try:
             await fld.click()
             await page.keyboard.press("Control+A")
@@ -544,6 +596,74 @@ class VkWeb:
         except Exception as e:  # noqa: BLE001
             log.info("VK-браузер: синтетическая вставка не сработала: %s", str(e)[:100])
         return False
+
+    @staticmethod
+    async def _select_word(fld, word: str, occurrence: int) -> bool:
+        """Выделить occurrence-е вхождение слова в поле (как будто это сделал человек мышкой)."""
+        return bool(await fld.evaluate(
+            """(el, [word, nth]) => {
+                const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                const nodes = [], parts = [];
+                let n; while ((n = walker.nextNode())) { nodes.push(n); parts.push(n.nodeValue); }
+                const flat = parts.join('');
+                let idx = -1; for (let i = 0; i < nth; i++) { idx = flat.indexOf(word, idx + 1); if (idx < 0) return false; }
+                const locate = (pos) => { let acc = 0;
+                    for (let i = 0; i < nodes.length; i++) {
+                        const len = parts[i].length;
+                        if (pos <= acc + len) return [nodes[i], pos - acc];
+                        acc += len;
+                    } return null; };
+                const a = locate(idx), b = locate(idx + word.length);
+                if (!a || !b) return false;
+                const r = document.createRange(); r.setStart(a[0], a[1]); r.setEnd(b[0], b[1]);
+                const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+                el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                el.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true}));
+                document.dispatchEvent(new Event('selectionchange'));
+                return true; }""", [word, occurrence]))
+
+    async def _apply_links_ui(self, page, fld, spans: list) -> bool:
+        """Навесить ссылки на слова через панель форматирования VK (как это делает человек)."""
+        done = 0
+        for word, nth, url in spans:
+            await fld.click()
+            if not await self._select_word(fld, word, nth):
+                log.warning("VK-браузер: не нашёл в поле слово «%s» для ссылки", word[:40])
+                continue
+            await asyncio.sleep(0.6)
+            btn = await self._first(page, [
+                "[data-testid*='link_button']", "[data-testid*='add_link']", "[data-testid*='_link']",
+                page.get_by_role("button", name=re.compile(r"ссылк", re.I)),
+                page.locator("[aria-label*='сылк']"), page.locator("[title*='сылк']"),
+            ], 2500)
+            if btn:
+                await btn.click()
+            else:
+                await page.keyboard.press("Control+K")   # у многих редакторов это «вставить ссылку»
+            await asyncio.sleep(0.8)
+            inp = await self._first(page, [
+                "[data-testid*='link'] input[type='text']", "[role='dialog'] input[type='url']",
+                "[role='dialog'] input[type='text']:visible", "input[placeholder*='сылк']",
+            ], 2500)
+            if not inp:
+                await self._dump(page, f"04b-link-{done}")
+                log.warning("VK-браузер: не нашёл поле для адреса ссылки (слово «%s»)", word[:40])
+                continue
+            await inp.fill(url)
+            await asyncio.sleep(0.3)
+            ok = await self._first(page, [
+                page.get_by_role("button", name=re.compile(r"^\s*(Сохранить|Добавить|Готово|Применить|ОК)\s*$", re.I)),
+                "[data-testid*='link'] button[type='submit']",
+            ], 2000)
+            if ok:
+                await ok.click()
+            else:
+                await page.keyboard.press("Enter")
+            await asyncio.sleep(0.8)
+            done += 1
+        links = await fld.locator("a[href]").count()
+        log.info("VK-браузер: ссылок в поле после ручной простановки: %s из %s", links, len(spans))
+        return links >= len(spans)
 
     async def _type_value(self, page, inp, value: str) -> bool:
         """Поле-выпадашка VKUI: кликаем, стираем, печатаем, выбираем совпавший пункт (или Enter), проверяем."""
